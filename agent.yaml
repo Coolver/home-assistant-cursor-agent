@@ -1,0 +1,39 @@
+spec_version: "0.1.0"
+name: home-assistant-vibecode-agent
+version: 2.10.47
+description: >
+  A Home Assistant MCP server and AI agent that enables Claude Code, Cursor,
+  VS Code, and any MCP-enabled IDE to safely create and manage Home Assistant
+  automations, dashboards, scripts, themes, and HACS integrations using natural
+  language. The agent runs inside or alongside Home Assistant, providing
+  structured, safe, git-versioned access to its internal APIs — replacing
+  fragile SSH-based scripting with a stable, context-efficient automation layer.
+author: Coolver
+license: MIT
+
+model:
+  preferred: anthropic:claude-sonnet-4-6
+  constraints:
+    temperature: 0.3
+
+skills:
+  - automation-creation
+  - dashboard-design
+  - config-management
+  - log-analysis
+  - git-versioning
+  - hacs-management
+
+runtime:
+  max_turns: 50
+  timeout: 600
+
+compliance:
+  risk_tier: standard
+  supervision:
+    human_in_the_loop: destructive
+    kill_switch: true
+  recordkeeping:
+    audit_logging: true
+  data_governance:
+    pii_handling: redact
