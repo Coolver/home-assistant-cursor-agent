@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.10.48] - 2026-08-03
+
+**Thanks:** [Dean Kleissas](https://github.com/dkleissa) for hunting down and fixing this bug in [PR #43](https://github.com/Coolver/home-assistant-vibecode-agent/pull/43).
+
+### Automations and entity lists work again on large Home Assistant installs
+
+**What went wrong:** On homes with a lot of entities, asking the AI to list automations (or anything else that needs the full entity registry) could fail right after the agent connected. Authentication succeeded, then the WebSocket quietly dropped the moment Home Assistant sent back a very large registry payload—so tools that depend on that list looked broken even though the rest of the setup was fine.
+
+**What we changed:** The agent now accepts much larger WebSocket messages, keeps the connection healthier with a regular heartbeat, logs disconnects more clearly when something still goes wrong, and safely retries that read-only registry request once after reconnecting.
+
+**Pair with MCP client 3.2.31+** (no MCP package bump required for this fix).
+
 ## [2.10.47] - 2026-05-12
 
 **Pair with MCP client 3.2.30+.**
