@@ -16,6 +16,7 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY app/ ./app/
+# bundled_skills live under app/bundled_skills/
 COPY run-standalone.sh .
 RUN chmod +x run-standalone.sh
 

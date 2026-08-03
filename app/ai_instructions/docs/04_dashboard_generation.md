@@ -1,194 +1,86 @@
 # 🎨 LOVELACE DASHBOARD GENERATION (AI-DRIVEN)
 
-**IMPORTANT:** Dashboard generation happens in CURSOR AI, not on agent!
-Agent only provides entity data and applies final YAML.
+**Defaults:** Native Home Assistant cards only — no Mushroom, no manual HACS steps for the user.
+
+**Optional:** After user approves in chat, install Mushroom via `ha_install_dashboard_enhancements`.
 
 ---
 
-## Conversational Workflow for Dashboard Creation
+## Workflow
 
-When user asks to create dashboard, follow this dialog:
-
-### STEP 0: Pre-Creation Checks (MANDATORY!)
-
-**Before creating any dashboard:**
-
-1. **Check if dashboard already exists:**
-   ```
-   ha_preview_dashboard
-   ha_list_files (directory="/")
-   ```
-   - Look for existing .yaml dashboard files
-   - Check configuration.yaml for registered dashboards
-   - If exists: Ask user if they want to overwrite or use different name
-
-2. **Validate dashboard filename:**
-   ```
-   ⚠️ CRITICAL: Dashboard URL path MUST contain a hyphen (-)!
-   
-   ❌ BAD:  "heating" (no hyphen)
-   ❌ BAD:  "stat" (no hyphen)
-   ❌ BAD:  "climate" (no hyphen)
-   
-   ✅ GOOD: "heating-now"
-   ✅ GOOD: "climate-control"
-   ✅ GOOD: "my-dashboard"
-   ```
-   
-   **Rules:**
-   - If user suggests name without hyphen (e.g., "Heating Now")
-   - Convert to kebab-case: "heating-now" ✅
-   - If single word: add "-dashboard": "heating" → "heating-dashboard"
-   - Always confirm filename with user before proceeding
-
-3. **Example dialog:**
-   ```
-   User: "Create dashboard called 'Heating'"
-   
-   AI: "I'll create a dashboard for you. 
-   
-   Note: Home Assistant requires dashboard filenames to contain a hyphen.
-   I suggest: 'heating-dashboard.yaml'
-   
-   Or would you prefer: 'heating-monitor', 'heating-control', or another name?"
-   ```
-
-### STEP 1: Understand Requirements
-
-Ask clarifying questions:
-- "What's the main purpose of this dashboard?" (overview, climate control, monitoring, etc)
-- "Which devices/rooms are most important to you?"
-- "Do you prefer detailed view or simple quick controls?"
-- "Any specific features you want to see? (battery levels, temperature, automations)"
-
-### STEP 2: Analyze Available Entities
+### 1. Discover
 
 ```
-ha_analyze_entities_for_dashboard
-→ Get complete entity list with attributes
-→ Understand what user has available
+ha_list_dashboards
+ha_read_dashboard {id}
+ha_analyze_entities_for_dashboard (summary_only=true)
 ```
 
-### STEP 3: Propose Dashboard Structure
+Do **not** rely on `ha_preview_dashboard` for storage dashboards.
 
-Based on user requirements and available entities, propose:
-- "I suggest 4 views: Home (overview), Climate (7 TRVs), Sensors (battery+temp), Automation"
-- "Would you like to add Media view for your 3 media players?"
-- Show entity counts per view
-
-### STEP 4: Generate YAML in Cursor (YOU)
-
-Create dashboard YAML structure:
-
-```yaml
-title: "User's Dashboard Title"
-views:
-  - title: Home
-    path: home
-    icon: mdi:home
-    cards:
-      - type: weather-forecast
-        entity: weather.forecast_home
-      - type: entities
-        title: Quick Controls
-        entities:
-          - climate.bedroom_trv
-          - light.living_room
-  
-  - title: Climate
-    path: climate  
-    icon: mdi:thermostat
-    cards:
-      - type: thermostat
-        entity: climate.entity1
-      - type: thermostat
-        entity: climate.entity2
-```
-
-### STEP 5: Show Preview to User
-
-- Display generated YAML structure
-- Highlight key features
-- Ask for approval or modifications
-
-### STEP 6: Apply Dashboard
+### 2. Optional UI enhancements (ask first!)
 
 ```
-ha_apply_dashboard({
-  dashboard_config: your_generated_yaml,
-  filename: 'custom-dashboard.yaml',
-  register_dashboard: true
-})
-→ Agent applies, registers, restarts HA
-→ Dashboard appears in sidebar!
+ha_dashboard_enhancements_status
+```
+
+If `mushroom_hacs_installed` is false and user cares about looks:
+
+> "Дашборд можно улучшить карточками Mushroom — установлю через HACS автоматически. Нужно ваше подтверждение. Без этого всё работает на стандартных карточках HA."
+
+Only after **yes**:
+
+```
+ha_install_dashboard_enhancements
+```
+
+### 3. Optional Cursor skill (ask first!)
+
+```
+ha_list_bundled_skills
+```
+
+If user wants persistent dashboard guidance in Cursor:
+
+> "Могу установить skill `home-assistant-dashboards` в ваш проект через агента (необязательно)."
+
+After **yes**: `ha_install_bundled_skill` or `ha_get_bundled_skill` + write to `.cursor/skills/`.
+
+### 4. Generate YAML (in Cursor)
+
+- **Default:** `entities`, `thermostat`, `vacuum`, `weather-forecast`, `conditional`
+- **After Mushroom:** `custom:mushroom-*` + resources only if enhancements status says installed
+
+Filename must contain a hyphen: `home-main.yaml`, `climate-control.yaml`.
+
+### 5. Apply safely
+
+```
+ha_create_checkpoint
+ha_apply_dashboard_by_id OR ha_apply_dashboard
+ha_check_config
+ha_reload_config
 ```
 
 ---
 
-## Card Type Guidelines
+## Card types (native default)
 
-| Entity Domain | Recommended Card Type | Example |
-|---------------|----------------------|---------|
-| `weather.*` | `weather-forecast` | Full weather card |
-| `climate.*` | `thermostat` | Interactive thermostat |
-| `media_player.*` | `media-control` | Media controls |
-| `camera.*` | `picture-entity` | Live camera feed |
-| `light.*` | `light` or `entities` | Light controls |
-| `sensor.*` | `entities` or `sensor` | Grouped sensors |
-| `automation.*` | `entities` | List with toggle |
-| `script.*` | `entities` | List with run button |
+| Domain | Card |
+|--------|------|
+| climate | thermostat |
+| vacuum | vacuum |
+| light | light |
+| sensor | entities |
+| weather | weather-forecast |
 
 ---
 
-## View Organization Best Practices
+## Never
 
-### 1. Home View (Always first)
-- Weather card (if available)
-- Person tracking
-- Quick access to 4-6 most used devices
-- Important sensors (battery, alerts)
+- Require Mushroom or manual `/local/mushroom.js` setup
+- Use `custom:*` without checking enhancements status
+- Skip checkpoint before writes
+- Force skill install — always optional
 
-### 2. Domain-Specific Views
-- Group by function (Climate, Lights, Media)
-- 3-8 cards per view (not too many)
-- Logical ordering
-
-### 3. Monitoring View
-- Battery levels
-- Temperature sensors
-- System status
-- Grouped by type/room
-
-### 4. Automation View
-- Automations + Scripts together
-- Easy enable/disable
-- Execution buttons for scripts
-
----
-
-## Key Points
-
-- ✅ AI generates YAML in Cursor (flexible, intelligent)
-- ✅ AI asks questions to understand needs
-- ✅ AI proposes before creating
-- ✅ Agent only applies (simple, reliable)
-- ✅ User gets custom dashboard, not template
-
----
-
-## 🎯 Advanced Features
-
-### Conditional Cards
-
-For dynamic dashboards that show/hide cards based on entity state (e.g., showing only TRVs that are actively heating), see **06_conditional_cards.md** for detailed patterns and examples.
-
-**Common use cases:**
-- Heating monitoring (show only active TRVs)
-- Low battery alerts
-- Active media players
-- Problem/warning cards
-
-
-
-
-
+For conditional cards see **06_conditional_cards.md**.

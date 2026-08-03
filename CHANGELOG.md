@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Lovelace dashboards: storage + YAML
+
+- `GET /api/lovelace/dashboards/list` and `GET /api/lovelace/dashboards/{id}`
+- `POST /api/lovelace/dashboards/{id}/apply` and `POST .../export`
+- Optional enhancements: `GET/POST /api/lovelace/dashboards/enhancements/*` (Mushroom via HACS, user-approved)
+- Bundled Cursor skills: `GET/POST /api/skills/bundled/*` in `bundled_skills/`
+- Service module `app/services/lovelace_dashboard.py`; dashboard keys use `Path(filename).stem`
+- Docs: `docs/dashboard-migration.md`
+
 ## [2.10.47] - 2026-05-12
 
 **Pair with MCP client 3.2.30+.**

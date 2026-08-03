@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import logging
+from pathlib import Path
 import yaml
 
 from app.models.schemas import Response
@@ -12,6 +13,8 @@ from app.services.file_manager import file_manager
 from app.services.git_manager import git_manager
 from app.utils.pagination import paginate_items
 from app.utils.yaml_editor import YAMLEditor
+from app.services import lovelace_dashboard as lovelace_svc
+from app.services import lovelace_enhancements as enhancements_svc
 
 logger = logging.getLogger('ha_cursor_agent')
 router = APIRouter()
@@ -28,8 +31,8 @@ def _validate_dashboard_filename(filename: str) -> tuple[bool, str]:
     Returns:
         (is_valid, error_message)
     """
-    # Remove .yaml/.yml extension for validation
-    name_without_ext = filename.replace('.yaml', '').replace('.yml', '')
+    # Remove path and extension for validation (supports dashboards/foo-bar.yaml)
+    name_without_ext = Path(filename).stem
     
     # Check for hyphen
     if '-' not in name_without_ext:
@@ -85,8 +88,7 @@ async def _remove_dashboard_from_config(filename: str) -> bool:
         # Read current configuration as text
         config_content = await file_manager.read_file(config_path)
         
-        # Extract dashboard key from filename
-        dashboard_key = filename.replace('.yaml', '').replace('.yml', '')
+        dashboard_key = Path(filename).stem
         
         # Use YAMLEditor utility to remove entry and clean up empty sections
         new_config_content, was_found = YAMLEditor.remove_yaml_entry(
@@ -127,15 +129,25 @@ async def _register_dashboard(filename: str, title: str, icon: str) -> bool:
         # Read current configuration as text (to preserve !include and other HA directives)
         config_content = await file_manager.read_file(config_path)
         
-        # Extract dashboard key from filename (remove .yaml)
-        dashboard_key = filename.replace('.yaml', '').replace('.yml', '')
+        dashboard_key = Path(filename).stem
         
         # Check if lovelace section exists
         if 'lovelace:' not in config_content:
             # Add lovelace section at the end
-            lovelace_config = f"\n# Lovelace Dashboards\nlovelace:\n  dashboards:\n    {dashboard_key}:\n      mode: yaml\n      title: {title}\n      icon: {icon}\n      filename: {filename}\n      show_in_sidebar: true\n"
+            lovelace_config = f"\n# Lovelace Dashboards\nlovelace:\n  mode: storage\n  dashboards:\n    {dashboard_key}:\n      mode: yaml\n      title: {title}\n      icon: {icon}\n      filename: {filename}\n      show_in_sidebar: true\n"
             new_config_content = config_content.rstrip() + "\n" + lovelace_config
         else:
+            import re
+            lovelace_match = re.search(r'(lovelace:)(\n)', config_content)
+            if lovelace_match:
+                lovelace_head = config_content[lovelace_match.start() : lovelace_match.start() + 120]
+                if "mode:" not in lovelace_head:
+                    insert_pos = lovelace_match.end()
+                    config_content = (
+                        config_content[:insert_pos]
+                        + "  mode: storage\n"
+                        + config_content[insert_pos:]
+                    )
             # Check if dashboards section exists
             if f'  dashboards:' not in config_content:
                 # Add dashboards section under lovelace
@@ -191,6 +203,18 @@ class ApplyDashboardRequest(BaseModel):
     filename: str = "ai-dashboard.yaml"
     register_dashboard: bool = True  # Automatically register in configuration.yaml
     commit_message: Optional[str] = None  # Custom commit message for Git backup
+
+
+class ApplyDashboardByIdRequest(BaseModel):
+    """Apply Lovelace config to an existing dashboard (YAML or storage)."""
+    dashboard_config: Dict[str, Any]
+    create_backup: bool = True
+    commit_message: Optional[str] = None
+
+
+class ExportDashboardRequest(BaseModel):
+    """Export storage dashboard to YAML."""
+    filename: Optional[str] = None
 
 # ==================== Endpoints ====================
 
@@ -335,6 +359,128 @@ async def preview_current_dashboard():
         return Response(success=False, message=f"Failed to preview dashboard: {str(e)}")
 
 
+@router.get("/dashboards/enhancements/status", response_model=Response, dependencies=[Depends(verify_token)])
+async def dashboard_enhancements_status():
+    """
+    Check optional Mushroom/HACS enhancements. Native HA cards always work without this.
+    """
+    try:
+        status = await enhancements_svc.get_enhancements_status()
+        return Response(
+            success=True,
+            message="Dashboard enhancements status (optional)",
+            data=status,
+        )
+    except Exception as e:
+        logger.error(f"Error reading enhancements status: {e}")
+        return Response(success=False, message=str(e))
+
+
+@router.post("/dashboards/enhancements/install", response_model=Response, dependencies=[Depends(verify_token)])
+async def install_dashboard_enhancements():
+    """
+    Install Mushroom via HACS and register Lovelace resource. Requires user approval in IDE.
+    Not required for dashboards — native cards are the default.
+    """
+    try:
+        result = await enhancements_svc.install_dashboard_enhancements()
+        return Response(
+            success=result.get("success", False),
+            message=result.get("message", "Enhancements install finished"),
+            data=result,
+        )
+    except Exception as e:
+        logger.error(f"Error installing dashboard enhancements: {e}")
+        return Response(success=False, message=str(e))
+
+
+@router.get("/dashboards/list", response_model=Response, dependencies=[Depends(verify_token)])
+async def list_dashboards():
+    """
+    List all Lovelace dashboards (YAML-registered and storage mode).
+    """
+    try:
+        dashboards = await lovelace_svc.list_dashboards()
+        return Response(
+            success=True,
+            message=f"Found {len(dashboards)} dashboard(s)",
+            data={"dashboards": dashboards, "count": len(dashboards)},
+        )
+    except Exception as e:
+        logger.error(f"Error listing dashboards: {e}")
+        return Response(success=False, message=f"Failed to list dashboards: {str(e)}")
+
+
+@router.get("/dashboards/{dashboard_id}", response_model=Response, dependencies=[Depends(verify_token)])
+async def read_dashboard(dashboard_id: str):
+    """
+    Read dashboard Lovelace config by id (normalized config, not raw storage wrapper).
+    """
+    try:
+        payload = await lovelace_svc.read_dashboard(dashboard_id)
+        return Response(
+            success=True,
+            message=f"Dashboard '{dashboard_id}' ({payload.get('mode')} mode)",
+            data=payload,
+        )
+    except FileNotFoundError:
+        return Response(success=False, message=f"Dashboard not found: {dashboard_id}", data=None)
+    except Exception as e:
+        logger.error(f"Error reading dashboard {dashboard_id}: {e}")
+        return Response(success=False, message=f"Failed to read dashboard: {str(e)}")
+
+
+@router.post("/dashboards/{dashboard_id}/apply", response_model=Response, dependencies=[Depends(verify_token)])
+async def apply_dashboard_by_id(dashboard_id: str, request: ApplyDashboardByIdRequest):
+    """
+    Apply Lovelace config to YAML file or storage dashboard (.storage).
+    """
+    try:
+        if request.create_backup:
+            await git_manager.commit_changes(
+                f"Before applying dashboard: {dashboard_id}",
+                skip_if_processing=True,
+            )
+
+        result = await lovelace_svc.apply_dashboard_by_id(
+            dashboard_id,
+            request.dashboard_config,
+            create_backup=False,
+            commit_message=request.commit_message,
+        )
+        return Response(
+            success=True,
+            message=f"Dashboard '{dashboard_id}' applied ({result['mode']} mode)",
+            data=result,
+        )
+    except FileNotFoundError:
+        return Response(success=False, message=f"Dashboard not found: {dashboard_id}", data=None)
+    except Exception as e:
+        logger.error(f"Error applying dashboard {dashboard_id}: {e}")
+        return Response(success=False, message=f"Failed to apply dashboard: {str(e)}")
+
+
+@router.post("/dashboards/{dashboard_id}/export", response_model=Response, dependencies=[Depends(verify_token)])
+async def export_dashboard(dashboard_id: str, request: ExportDashboardRequest):
+    """
+    Export storage-mode dashboard config as YAML for migration to YAML mode.
+    """
+    try:
+        payload = await lovelace_svc.export_dashboard_to_yaml(dashboard_id, request.filename)
+        return Response(
+            success=True,
+            message=f"Exported dashboard '{dashboard_id}' to YAML",
+            data=payload,
+        )
+    except ValueError as e:
+        return Response(success=False, message=str(e), data=None)
+    except FileNotFoundError:
+        return Response(success=False, message=f"Dashboard not found: {dashboard_id}", data=None)
+    except Exception as e:
+        logger.error(f"Error exporting dashboard {dashboard_id}: {e}")
+        return Response(success=False, message=f"Failed to export dashboard: {str(e)}")
+
+
 @router.post("/apply", response_model=Response, dependencies=[Depends(verify_token)])
 async def apply_dashboard(request: ApplyDashboardRequest):
     """
@@ -359,8 +505,7 @@ async def apply_dashboard(request: ApplyDashboardRequest):
                 data=None
             )
         
-        # Check if dashboard already exists
-        dashboard_key = request.filename.replace('.yaml', '').replace('.yml', '')
+        dashboard_key = Path(request.filename).stem
         config_content = await file_manager.read_file("configuration.yaml")
         
         if f'{dashboard_key}:' in config_content:
