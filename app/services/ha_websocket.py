@@ -9,6 +9,11 @@ from datetime import datetime
 logger = logging.getLogger('ha_cursor_agent')
 
 
+# Home Assistant's entity registry can be considerably larger than the default
+# 4 MiB aiohttp WebSocket receive limit on established installations.
+WEBSOCKET_MAX_MESSAGE_SIZE = 16 * 1024 * 1024
+
+
 class HAWebSocketClient:
     """
     Persistent WebSocket connection to Home Assistant
@@ -126,7 +131,11 @@ class HAWebSocketClient:
             self.session = aiohttp.ClientSession()
         
         try:
-            async with self.session.ws_connect(self.url) as ws:
+            async with self.session.ws_connect(
+                self.url,
+                max_msg_size=WEBSOCKET_MAX_MESSAGE_SIZE,
+                heartbeat=30.0,
+            ) as ws:
                 self.ws = ws
                 
                 # Step 1: Receive auth_required
@@ -160,12 +169,20 @@ class HAWebSocketClient:
                         except json.JSONDecodeError as e:
                             logger.error(f"Failed to parse WebSocket message: {e}")
                     
-                    elif msg.type == aiohttp.WSMsgType.CLOSED:
-                        logger.warning("WebSocket closed by server")
-                        break
-                    
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        logger.error(f"WebSocket error: {ws.exception()}")
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    ):
+                        log = logger.error if msg.type == aiohttp.WSMsgType.ERROR else logger.warning
+                        log(
+                            "WebSocket closed: type=%s close_code=%s exception=%r data=%r",
+                            msg.type.name,
+                            ws.close_code,
+                            ws.exception(),
+                            msg.data,
+                        )
                         break
         finally:
             self._connected = False
@@ -393,8 +410,25 @@ class HAWebSocketClient:
         Returns:
             List of entity registry entries with metadata (area_id, device_id, name, etc.)
         """
-        result = await self._send_message({'type': 'config/entity_registry/list'}, timeout=90.0)
-        return result or []
+        # This command only reads HA state, so retrying it once after a dropped
+        # connection is safe. Do not add generic retries to _send_message: that
+        # method is also used for state-changing commands.
+        for attempt in range(2):
+            try:
+                result = await self._send_message(
+                    {'type': 'config/entity_registry/list'}, timeout=90.0
+                )
+                return result or []
+            except ConnectionError:
+                if attempt:
+                    raise
+                logger.warning(
+                    "Entity registry request lost its WebSocket connection; retrying after reconnect"
+                )
+                await self.wait_for_connection(timeout=30.0)
+
+        # The loop always returns or raises; this makes the type contract clear.
+        return []
     
     async def get_entity_registry_entry(self, entity_id: str) -> dict:
         """
@@ -771,7 +805,6 @@ async def get_ws_client() -> HAWebSocketClient:
             raise Exception("WebSocket not connected after 30s. HA may be restarting.")
     
     return ha_ws_client
-
 
 
 
